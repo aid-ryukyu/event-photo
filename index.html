@@ -40,25 +40,6 @@
         color: #666;
         line-height: 1.5;
       }
-      .form-group {
-        margin: 15px 0;
-      }
-      label.input-label {
-        display: block;
-        font-size: 14px;
-        font-weight: bold;
-        margin-bottom: 5px;
-        color: #3c4043;
-      }
-      input[type="password"] {
-        width: 100%;
-        padding: 10px;
-        border: 1px solid #dadce0;
-        border-radius: 4px;
-        box-sizing: border-box;
-        font-size: 16px;
-      }
-      
       /* ファイル選択ボタンエリア */
       .file-btn-container {
         margin: 20px 0 10px 0;
@@ -255,6 +236,81 @@
       .shutter-btn:active {
         background: #ddd;
       }
+      /* ギャラリーの拡大表示 */
+      .gallery-viewer {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: #000;
+        z-index: 1000;
+        display: flex;
+        flex-direction: column;
+      }
+      .viewer-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+        color: #fff;
+        font-size: 15px;
+        font-weight: bold;
+      }
+      .viewer-close-btn {
+        background: none;
+        border: none;
+        color: #fff;
+        font-size: 26px;
+        line-height: 1;
+        padding: 4px 8px;
+        cursor: pointer;
+      }
+      .viewer-body {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        touch-action: pan-y pinch-zoom;
+      }
+      .viewer-body img {
+        flex: 1;
+        min-width: 0;
+        width: 100%;
+        object-fit: contain;
+      }
+      .viewer-body.unchecked img {
+        opacity: 0.4;
+      }
+      .viewer-nav-btn {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 44px;
+        height: 64px;
+        border: none;
+        background: rgba(0, 0, 0, 0.4);
+        color: #fff;
+        font-size: 28px;
+        cursor: pointer;
+        padding: 0;
+      }
+      .viewer-nav-btn.prev {
+        left: 0;
+        border-radius: 0 6px 6px 0;
+      }
+      .viewer-nav-btn.next {
+        right: 0;
+        border-radius: 6px 0 0 6px;
+      }
+      .viewer-select-btn {
+        background: #34a853;
+        color: #fff;
+      }
+      .viewer-select-btn.off {
+        background: #5f6368;
+      }
+
       .camera-done-btn {
         width: 80px;
         background: #34a853;
@@ -315,8 +371,9 @@
         position: absolute;
         top: 5px;
         left: 5px;
-        width: 22px;
-        height: 22px;
+        width: 28px;
+        height: 28px;
+        margin: 0;
         z-index: 2;
         cursor: pointer;
       }
@@ -367,15 +424,6 @@
       <p>撮影・選択した写真がギャラリーに入ります。（スマホ本体には保存されません）</p>
 
       <form id="uploadForm" onsubmit="return false;">
-        <!-- パスワード入力項目 -->
-        <div class="form-group">
-          <label class="input-label" for="passInput">パスワード</label>
-          <!-- 4桁入力したらキーボードを閉じる -->
-          <input type="password" id="passInput" placeholder="パスワードを入力してください"
-                 inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off"
-                 oninput="if (this.value.length >= 4) this.blur();">
-        </div>
-
         <!-- カメラ撮影とアルバム選択を分ける（multiple 付きだとカメラが出ない端末があるため） -->
         <div class="file-btn-container">
           <button type="button" class="custom-file-btn" onclick="openCamera()">📷 カメラで連続撮影</button>
@@ -427,6 +475,23 @@
       </div>
     </div>
 
+    <!-- 一時保存ギャラリーの拡大表示 -->
+    <div id="galleryViewer" class="gallery-viewer" style="display: none;">
+      <div class="viewer-top">
+        <span id="viewerCount"></span>
+        <button type="button" class="viewer-close-btn" onclick="closeViewer()" aria-label="閉じる">✕</button>
+      </div>
+      <div id="viewerBody" class="viewer-body">
+        <img id="viewerImg" alt="">
+        <button type="button" id="viewerPrev" class="viewer-nav-btn prev" onclick="moveViewer(-1)" aria-label="前の写真">‹</button>
+        <button type="button" id="viewerNext" class="viewer-nav-btn next" onclick="moveViewer(1)" aria-label="次の写真">›</button>
+      </div>
+      <div class="camera-preview-btns">
+        <button type="button" id="viewerSelectBtn" class="viewer-select-btn" onclick="toggleViewerSelect()"></button>
+        <button type="button" class="preview-delete-btn" onclick="deleteViewerPhoto()">🗑 削除</button>
+      </div>
+    </div>
+
     <script>
       // 外部サイトに置く場合の送信先（Apps Script の「ウェブアプリ」URL、末尾は /exec）
       const GAS_URL = 'https://script.google.com/macros/s/AKfycbw2_oJFUE5K7UV63cgRxpQ4dbjsQc9jaBvUAox9sIg1wwT4-Qe4bvT-wT50DZnY8DQi/exec';
@@ -439,6 +504,9 @@
       // 縮小後の長辺の最大ピクセル数とJPEG画質（容量と画質のバランスで調整可）
       const MAX_EDGE = 2048;
       const JPEG_QUALITY = 0.85;
+
+      // 1枚あたりの上限サイズ（コード.gs の MAX_FILE_BYTES と合わせる）
+      const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
       let galleryList = [];
       let fileSeq = 0; // 削除しても減らさない連番（ファイル名の重複防止）
@@ -458,6 +526,7 @@
         input.value = ''; // 同じ写真を再選択できるよう先にリセット
         statusDiv.style.color = '#333';
         let failCount = 0;
+        let tooLargeCount = 0;
 
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
@@ -477,6 +546,12 @@
               mimeType = file.type || 'image/jpeg';
             }
 
+            // 送信しても保存できない大きさの写真はギャラリーに入れない
+            if (dataUrlBytes(data) > MAX_FILE_BYTES) {
+              tooLargeCount++;
+              continue;
+            }
+
             pushGalleryItem(data, mimeType, timeStr);
           } catch (e) {
             failCount++;
@@ -485,13 +560,21 @@
         }
 
         isLoading = false;
-        if (failCount > 0) {
-          statusDiv.style.color = 'red';
-          statusDiv.innerText = failCount + '件の画像を読み込めませんでした。';
-        } else {
-          statusDiv.innerText = '';
+        const errors = [];
+        if (failCount > 0) errors.push(failCount + '件の画像を読み込めませんでした。');
+        if (tooLargeCount > 0) {
+          errors.push(tooLargeCount + '件の画像は大きすぎるため追加できませんでした（1枚 ' +
+            (MAX_FILE_BYTES / 1024 / 1024) + 'MB まで）。');
         }
+        statusDiv.style.color = 'red';
+        statusDiv.innerText = errors.join('\n');
         renderGallery();
+      }
+
+      // DataURL を元のバイト数に換算する（Base64 は元の約 4/3 倍）
+      function dataUrlBytes(dataUrl) {
+        const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+        return Math.floor(base64.length * 3 / 4);
       }
 
       function pushGalleryItem(data, mimeType, timeStr) {
@@ -856,11 +939,11 @@
             removeItem(index);
           };
 
-          // 画像要素（タップで選択/非選択を切り替え）
+          // 画像要素（タップで拡大表示）
           const img = document.createElement('img');
           img.src = item.data;
           img.onclick = function() {
-            toggleSelect(index);
+            openViewer(index);
           };
 
           itemDiv.appendChild(checkbox);
@@ -886,23 +969,100 @@
         renderGallery();
       }
 
+      // ==========================================
+      // ギャラリーの拡大表示
+      // ==========================================
+      let viewerIndex = -1;
+      let touchStartX = null;
+      let touchStartY = null;
+
+      function openViewer(index) {
+        viewerIndex = index;
+        document.getElementById('galleryViewer').style.display = 'flex';
+        renderViewer();
+      }
+
+      function closeViewer() {
+        viewerIndex = -1;
+        document.getElementById('galleryViewer').style.display = 'none';
+      }
+
+      function renderViewer() {
+        if (galleryList.length === 0) {
+          closeViewer();
+          return;
+        }
+        viewerIndex = Math.min(Math.max(viewerIndex, 0), galleryList.length - 1);
+        const item = galleryList[viewerIndex];
+
+        document.getElementById('viewerImg').src = item.data;
+        document.getElementById('viewerCount').innerText = (viewerIndex + 1) + ' / ' + galleryList.length;
+        document.getElementById('viewerBody').classList.toggle('unchecked', !item.selected);
+        document.getElementById('viewerPrev').style.visibility = viewerIndex > 0 ? 'visible' : 'hidden';
+        document.getElementById('viewerNext').style.visibility = viewerIndex < galleryList.length - 1 ? 'visible' : 'hidden';
+
+        const selectBtn = document.getElementById('viewerSelectBtn');
+        selectBtn.innerText = item.selected ? '✓ 送信する' : '送信しない';
+        selectBtn.classList.toggle('off', !item.selected);
+      }
+
+      function moveViewer(step) {
+        const next = viewerIndex + step;
+        if (next < 0 || next >= galleryList.length) return;
+        viewerIndex = next;
+        renderViewer();
+      }
+
+      function toggleViewerSelect() {
+        galleryList[viewerIndex].selected = !galleryList[viewerIndex].selected;
+        renderGallery();
+        renderViewer();
+      }
+
+      function deleteViewerPhoto() {
+        galleryList.splice(viewerIndex, 1);
+        renderGallery();
+        renderViewer(); // 次の写真を表示（最後の1枚なら閉じる）
+      }
+
+      // 左右スワイプで前後の写真へ
+      const viewerBody = document.getElementById('viewerBody');
+      viewerBody.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 1) {
+          touchStartX = null; // 2本指（拡大操作）のときは無視
+          return;
+        }
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+      }, { passive: true });
+      viewerBody.addEventListener('touchend', (e) => {
+        if (touchStartX === null) return;
+        const dx = e.changedTouches[0].clientX - touchStartX;
+        const dy = e.changedTouches[0].clientY - touchStartY;
+        touchStartX = null;
+        if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+          moveViewer(dx < 0 ? 1 : -1);
+        }
+      });
+
+      // パソコンで開いたとき用（← → で移動、Esc で閉じる）
+      document.addEventListener('keydown', (e) => {
+        if (viewerIndex < 0) return;
+        if (e.key === 'ArrowLeft') moveViewer(-1);
+        else if (e.key === 'ArrowRight') moveViewer(1);
+        else if (e.key === 'Escape') closeViewer();
+      });
+
       /**
        * 1枚ずつ安全に順次送信（画面フリーズ・白画面防止処理）
        */
       async function processUpload() {
-        const passInput = document.getElementById('passInput');
         const statusDiv = document.getElementById('status');
         const submitBtn = document.getElementById('submitBtn');
 
         const uploadTargets = galleryList.filter(item => item.selected);
 
         if (uploadTargets.length === 0) return;
-
-        if (!passInput.value) {
-          statusDiv.style.color = 'red';
-          statusDiv.innerText = 'パスワードを入力してください。';
-          return;
-        }
 
         submitBtn.disabled = true;
         statusDiv.style.color = '#333';
@@ -922,7 +1082,7 @@
           };
 
           try {
-            const res = await sendSingleFilePromise(fileData, passInput.value);
+            const res = await sendSingleFilePromise(fileData);
             if (res.success) {
               successCount++;
               // 送信できた画像だけギャラリーから除外
@@ -954,14 +1114,14 @@
       /**
        * 非同期処理用プロミス関数
        */
-      function sendSingleFilePromise(fileData, password) {
+      function sendSingleFilePromise(fileData) {
         // Apps Script 上で表示している場合
         if (window.google && google.script && google.script.run) {
           return new Promise((resolve, reject) => {
             google.script.run
               .withSuccessHandler((res) => resolve(res))
               .withFailureHandler((err) => reject(err))
-              .uploadSingleFile(fileData, password);
+              .uploadSingleFile(fileData);
           });
         }
 
@@ -973,7 +1133,7 @@
         return fetch(GAS_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({ file: fileData, password: password })
+          body: JSON.stringify({ file: fileData })
         }).then((res) => {
           if (!res.ok) throw new Error('通信エラー (' + res.status + ')');
           return res.json();
