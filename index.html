@@ -370,7 +370,10 @@
         <!-- パスワード入力項目 -->
         <div class="form-group">
           <label class="input-label" for="passInput">パスワード</label>
-          <input type="password" id="passInput" placeholder="パスワードを入力してください">
+          <!-- 4桁入力したらキーボードを閉じる -->
+          <input type="password" id="passInput" placeholder="パスワードを入力してください"
+                 inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off"
+                 oninput="if (this.value.length >= 4) this.blur();">
         </div>
 
         <!-- カメラ撮影とアルバム選択を分ける（multiple 付きだとカメラが出ない端末があるため） -->
