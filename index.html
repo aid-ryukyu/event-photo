@@ -683,15 +683,16 @@
           return;
         }
 
-        // デジタルズーム中は、画面に見えている範囲だけを切り出す
-        // （カメラ本体のズームが効いている場合は映像そのものが拡大済み）
+        // 画面上で拡大している分は、画面に見えている範囲だけを切り出す
+        // （カメラ本体のズームが効いている分は映像そのものが拡大済み）
         let sw = video.videoWidth;
         let sh = video.videoHeight;
-        if (!hwZoom && zoomLevel > 1) {
+        const f = zoomLevel / hwLevel;
+        if (f > 1.001) {
           const view = document.getElementById('cameraView');
           const fit = Math.min(view.clientWidth / sw, view.clientHeight / sh); // 等倍での表示倍率
-          sw *= Math.min(1, view.clientWidth / (sw * fit * zoomLevel));
-          sh *= Math.min(1, view.clientHeight / (sh * fit * zoomLevel));
+          sw *= Math.min(1, view.clientWidth / (sw * fit * f));
+          sh *= Math.min(1, view.clientHeight / (sh * fit * f));
         }
         const sx = (video.videoWidth - sw) / 2;
         const sy = (video.videoHeight - sh) / 2;
@@ -814,17 +815,30 @@
       // ==========================================
       // カメラのズーム（映像の枠の中だけで拡大する）
       // ==========================================
+      // 画面上の拡大（CSS）はすぐ反映できるが、カメラ本体のズームは反映に時間がかかる。
+      // そのためピンチ中は画面上の拡大で見せ、指を離したときにカメラ本体へ反映する。
+      //   zoomLevel … 利用者が指定した倍率
+      //   hwLevel   … カメラ本体に反映済みの倍率（本体ズームが無ければ常に 1）
+      //   画面上の拡大 = zoomLevel / hwLevel
       const DIGITAL_ZOOM_MAX = 4; // カメラ本体のズームが使えない端末での最大倍率
       let zoomLevel = 1;
+      let hwLevel = 1;
       let zoomMax = DIGITAL_ZOOM_MAX;
       let hwZoom = null; // カメラ本体のズーム範囲 { min, max }（使えなければ null）
       let hwZoomBusy = false;
       let hwZoomPending = null;
+      let hwCommitTimer = null;
+      let zoomSession = 0; // カメラを開き直したら古い反映処理を捨てるための番号
 
       function setupZoom() {
+        zoomSession++;
         zoomLevel = 1;
+        hwLevel = 1;
         zoomMax = DIGITAL_ZOOM_MAX;
         hwZoom = null;
+        hwZoomBusy = false;
+        hwZoomPending = null;
+        clearTimeout(hwCommitTimer);
         document.getElementById('cameraVideo').style.transform = '';
 
         const track = cameraStream.getVideoTracks()[0];
@@ -842,44 +856,77 @@
 
       /**
        * 倍率を設定（1 = 等倍）
+       * commit が false のときは画面上の拡大だけ行い、カメラ本体には反映しない（ピンチ中）
        */
-      function setZoom(z) {
+      function setZoom(z, commit = true) {
         zoomLevel = Math.min(Math.max(z, 1), zoomMax);
+        renderZoom();
+        if (hwZoom && commit) commitHwZoom();
+      }
 
-        if (hwZoom) {
-          hwZoomPending = hwZoom.min * zoomLevel;
-          applyHwZoom();
-        } else {
-          document.getElementById('cameraVideo').style.transform =
-            zoomLevel > 1 ? 'scale(' + zoomLevel + ')' : '';
-        }
+      function renderZoom() {
+        const f = zoomLevel / hwLevel;
+        document.getElementById('cameraVideo').style.transform =
+          Math.abs(f - 1) > 0.001 ? 'scale(' + f + ')' : '';
 
         const badge = document.getElementById('cameraZoom');
         badge.innerText = zoomLevel.toFixed(1) + 'x';
         badge.style.display = zoomLevel > 1.05 ? 'block' : 'none';
       }
 
-      // カメラ本体のズームは反映に時間がかかるため、最新の値だけを順番に反映する
+      function commitHwZoom() {
+        clearTimeout(hwCommitTimer);
+        hwZoomPending = zoomLevel;
+        applyHwZoom();
+      }
+
+      // カメラ本体へ反映（反映中に新しい指定が来たら、最新の値だけを続けて反映する）
       async function applyHwZoom() {
         if (hwZoomBusy || !cameraStream) return;
         hwZoomBusy = true;
+        const session = zoomSession;
         const track = cameraStream.getVideoTracks()[0];
+        const video = document.getElementById('cameraVideo');
+
         while (hwZoomPending !== null && hwZoom) {
-          const value = hwZoomPending;
+          const level = hwZoomPending;
           hwZoomPending = null;
           try {
-            await track.applyConstraints({ advanced: [{ zoom: value }] });
+            await track.applyConstraints({ advanced: [{ zoom: hwZoom.min * level }] });
+            // 反映直後はまだ古い映像が届くことがあるので、数コマ待ってから画面上の拡大を外す
+            await waitForFrames(video, 3);
           } catch (e) {
+            if (session !== zoomSession) return;
             // 反映できない端末はデジタルズームに切り替える
             console.warn('ズームエラー:', e);
             hwZoom = null;
+            hwLevel = 1;
             zoomMax = DIGITAL_ZOOM_MAX;
             hwZoomBusy = false;
             setZoom(zoomLevel);
             return;
           }
+          if (session !== zoomSession) return; // その間にカメラが閉じられた
+          hwLevel = level;
+          renderZoom();
         }
         hwZoomBusy = false;
+      }
+
+      function waitForFrames(video, count) {
+        return new Promise((resolve) => {
+          const timer = setTimeout(resolve, 400); // 映像が止まっていても先へ進む
+          if (!video.requestVideoFrameCallback) return;
+          const next = () => {
+            if (--count <= 0) {
+              clearTimeout(timer);
+              resolve();
+            } else {
+              video.requestVideoFrameCallback(next);
+            }
+          };
+          video.requestVideoFrameCallback(next);
+        });
       }
 
       /**
@@ -908,17 +955,26 @@
       cameraView.addEventListener('touchmove', (e) => {
         if (e.touches.length === 2 && pinchStartDist) {
           e.preventDefault();
-          setZoom(pinchStartZoom * pinchDistance(e.touches) / pinchStartDist);
+          setZoom(pinchStartZoom * pinchDistance(e.touches) / pinchStartDist, false);
         }
       }, { passive: false });
-      cameraView.addEventListener('touchend', (e) => {
-        if (e.touches.length < 2) pinchStartDist = null;
-      });
+      const endPinch = (e) => {
+        if (e.touches.length < 2 && pinchStartDist) {
+          pinchStartDist = null;
+          if (hwZoom) commitHwZoom(); // 指を離したらカメラ本体へ反映
+        }
+      };
+      cameraView.addEventListener('touchend', endPinch);
+      cameraView.addEventListener('touchcancel', endPinch);
 
-      // パソコンで開いたとき用（マウスホイールでズーム）
+      // パソコンで開いたとき用（マウスホイールでズーム、止めたらカメラ本体へ反映）
       cameraView.addEventListener('wheel', (e) => {
         e.preventDefault();
-        setZoom(zoomLevel * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+        setZoom(zoomLevel * (e.deltaY < 0 ? 1.1 : 1 / 1.1), false);
+        if (hwZoom) {
+          clearTimeout(hwCommitTimer);
+          hwCommitTimer = setTimeout(commitHwZoom, 250);
+        }
       }, { passive: false });
 
       // カメラ画面のどこでピンチしても、ページ全体は拡大させない（iPhone 対策含む）
