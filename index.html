@@ -257,9 +257,13 @@
         box-shadow: 0 0 0 3px #fff;
         padding: 0;
         cursor: pointer;
+        -webkit-tap-highlight-color: transparent; /* スマホの四角いタップ表示を出さない */
+        transition: transform 0.08s, background-color 0.08s;
       }
+      /* 押している間は丸いボタン自体が少し縮んで暗くなる */
       .shutter-btn:active {
-        background: #ddd;
+        background: #bbb;
+        transform: scale(0.9);
       }
       /* ギャラリーの拡大表示 */
       .gallery-viewer {
@@ -490,7 +494,8 @@
           <img id="cameraLastThumb" alt="">
           <span id="cameraCount"></span>
         </div>
-        <button type="button" class="shutter-btn" onclick="takePhoto()" aria-label="撮影"></button>
+        <!-- ontouchstart は iPhone で押している間の表示（:active）を効かせるため -->
+        <button type="button" class="shutter-btn" onclick="takePhoto()" ontouchstart="" aria-label="撮影"></button>
         <button type="button" class="camera-done-btn" onclick="closeCamera()">完了</button>
       </div>
 
