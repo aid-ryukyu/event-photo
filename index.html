@@ -639,6 +639,9 @@
           return;
         }
 
+        // 音はタップの直後でないと使えるようにならないため、カメラの準備を待つ前に用意する
+        prepareShutterSound();
+
         try {
           cameraStream = await navigator.mediaDevices.getUserMedia({
             video: {
@@ -688,6 +691,9 @@
           return;
         }
 
+        // 画像の変換に少し時間がかかるので、音を先に鳴らす
+        playShutterSound();
+
         // 画面上で拡大している分は、画面に見えている範囲だけを切り出す
         // （カメラ本体のズームが効いている分は映像そのものが拡大済み）
         let sw = video.videoWidth;
@@ -716,6 +722,79 @@
         const flash = document.getElementById('cameraFlash');
         flash.classList.add('on');
         setTimeout(() => flash.classList.remove('on'), 80);
+      }
+
+      // ==========================================
+      // シャッター音（ブラウザ内で合成した「カシャ」。音声ファイルは使わない）
+      // 撮影されていることが周りにわかるように鳴らす
+      // ※ スマホの音量設定に従うため、iPhone のマナーモード中などは鳴らないことがある
+      // ==========================================
+      const SHUTTER_VOLUME = 0.8;
+      let shutterCtx = null;
+      let shutterOut = null;
+      let shutterNoise = null;
+
+      function prepareShutterSound() {
+        try {
+          if (!shutterCtx) {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            if (!AC) return;
+            shutterCtx = new AC();
+            const comp = shutterCtx.createDynamicsCompressor();
+            shutterOut = shutterCtx.createGain();
+            shutterOut.gain.value = SHUTTER_VOLUME;
+            shutterOut.connect(comp).connect(shutterCtx.destination);
+
+            shutterNoise = shutterCtx.createBuffer(1, shutterCtx.sampleRate / 2, shutterCtx.sampleRate);
+            const d = shutterNoise.getChannelData(0);
+            for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+          }
+          if (shutterCtx.state === 'suspended') shutterCtx.resume();
+        } catch (e) {
+          shutterCtx = null; // 音が使えなくても撮影はできるようにする
+        }
+      }
+
+      function playShutterSound() {
+        prepareShutterSound();
+        if (!shutterCtx) return;
+        try {
+          const t = shutterCtx.currentTime + 0.005;
+          shutterNoiseBurst(t, 3800, 0.9, 0.9, 0.035);          // カシャの「カ」
+          shutterTone(t, 220, 120, 0.25, 0.02);                  // 小さな機械音
+          shutterNoiseBurst(t + 0.075, 2600, 0.8, 0.7, 0.06);    // カシャの「シャ」
+        } catch (e) {
+          // 鳴らせなくても撮影は続ける
+        }
+      }
+
+      function shutterEnvelope(t, peak, decay) {
+        const g = shutterCtx.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(peak, t + 0.001);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.001 + decay);
+        g.connect(shutterOut);
+        return g;
+      }
+
+      function shutterNoiseBurst(t, freq, q, peak, decay) {
+        const src = shutterCtx.createBufferSource();
+        src.buffer = shutterNoise;
+        const filter = shutterCtx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.value = freq;
+        filter.Q.value = q;
+        src.connect(filter).connect(shutterEnvelope(t, peak, decay));
+        src.start(t, Math.random() * 0.3, decay + 0.03);
+      }
+
+      function shutterTone(t, from, to, peak, decay) {
+        const osc = shutterCtx.createOscillator();
+        osc.frequency.setValueAtTime(from, t);
+        osc.frequency.exponentialRampToValueAtTime(to, t + decay);
+        osc.connect(shutterEnvelope(t, peak, decay));
+        osc.start(t);
+        osc.stop(t + decay + 0.05);
       }
 
       function showCameraMessage(text) {
