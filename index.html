@@ -660,6 +660,8 @@
 
         cameraShots = [];
         renderCameraStrip();
+        gravity = null;
+        window.addEventListener('devicemotion', onDeviceMotion);
         const video = document.getElementById('cameraVideo');
         video.srcObject = cameraStream;
         setupZoom();
@@ -694,25 +696,41 @@
         // 画像の変換に少し時間がかかるので、音を先に鳴らす
         playShutterSound();
 
+        // Android では画面に正しい向きで映っていても、切り出すとカメラ部品の向き（横）のままになる。
+        // そのときはスマホの傾きに合わせて回転する
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        const rotation = getCaptureRotation(vw, vh);
+        const swapped = rotation % 180 !== 0;
+
         // 画面上で拡大している分は、画面に見えている範囲だけを切り出す
         // （カメラ本体のズームが効いている分は映像そのものが拡大済み）
-        let sw = video.videoWidth;
-        let sh = video.videoHeight;
+        let fx = 1;
+        let fy = 1;
         const f = zoomLevel / hwLevel;
         if (f > 1.001) {
           const view = document.getElementById('cameraView');
-          const fit = Math.min(view.clientWidth / sw, view.clientHeight / sh); // 等倍での表示倍率
-          sw *= Math.min(1, view.clientWidth / (sw * fit * f));
-          sh *= Math.min(1, view.clientHeight / (sh * fit * f));
+          const dispW = swapped ? vh : vw; // 画面に映っている向きでの幅・高さ
+          const dispH = swapped ? vw : vh;
+          const fit = Math.min(view.clientWidth / dispW, view.clientHeight / dispH); // 等倍での表示倍率
+          fx = Math.min(1, view.clientWidth / (dispW * fit * f));
+          fy = Math.min(1, view.clientHeight / (dispH * fit * f));
         }
-        const sx = (video.videoWidth - sw) / 2;
-        const sy = (video.videoHeight - sh) / 2;
+        const sw = vw * (swapped ? fy : fx);
+        const sh = vh * (swapped ? fx : fy);
+        const sx = (vw - sw) / 2;
+        const sy = (vh - sh) / 2;
 
         const scale = Math.min(1, MAX_EDGE / Math.max(sw, sh));
+        const dw = Math.round(sw * scale);
+        const dh = Math.round(sh * scale);
         const canvas = document.createElement('canvas');
-        canvas.width = Math.round(sw * scale);
-        canvas.height = Math.round(sh * scale);
-        canvas.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+        canvas.width = swapped ? dh : dw;
+        canvas.height = swapped ? dw : dh;
+        const ctx = canvas.getContext('2d');
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.rotate(rotation * Math.PI / 180);
+        ctx.drawImage(video, sx, sy, sw, sh, -dw / 2, -dh / 2, dw, dh);
         const data = canvas.toDataURL('image/jpeg', JPEG_QUALITY);
 
         pushGalleryItem(data, 'image/jpeg', formatDate(new Date()));
@@ -722,6 +740,40 @@
         const flash = document.getElementById('cameraFlash');
         flash.classList.add('on');
         setTimeout(() => flash.classList.remove('on'), 80);
+      }
+
+      // ==========================================
+      // 撮影時の向き補正
+      // ==========================================
+      let gravity = null; // スマホの傾き（上方向が +）
+
+      function onDeviceMotion(e) {
+        const g = e.accelerationIncludingGravity;
+        if (g && g.x != null && g.y != null) gravity = { x: g.x, y: g.y };
+      }
+
+      /**
+       * 実際に空の方を向いているスマホの辺（上0 / 右90 / 下180 / 左270）
+       * 机に平置きなど判別できないときは縦持ち（0）とみなす
+       */
+      function getPhysicalUpAngle() {
+        if (!gravity) return 0;
+        const x = gravity.x;
+        const y = gravity.y;
+        if (Math.max(Math.abs(x), Math.abs(y)) < 3) return 0;
+        if (Math.abs(y) >= Math.abs(x)) return y > 0 ? 0 : 180;
+        return x > 0 ? 90 : 270;
+      }
+
+      /**
+       * 切り出した映像を時計回りに何度回せば正しい向きになるか
+       * 画面が縦なのに映像が横長 = Android でカメラ部品の向き（スマホの右側が上）のまま届いている
+       */
+      function getCaptureRotation(vw, vh) {
+        const isAndroid = /Android/i.test(navigator.userAgent);
+        const screenPortrait = window.innerHeight >= window.innerWidth;
+        if (!isAndroid || !screenPortrait || vw <= vh) return 0;
+        return (90 - getPhysicalUpAngle() + 360) % 360;
       }
 
       // ==========================================
@@ -884,6 +936,7 @@
 
       function closeCamera() {
         closePreview();
+        window.removeEventListener('devicemotion', onDeviceMotion);
         if (cameraStream) {
           cameraStream.getTracks().forEach(t => t.stop());
           cameraStream = null;
