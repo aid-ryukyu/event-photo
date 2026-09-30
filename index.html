@@ -476,6 +476,7 @@
       </form>
 
       <div id="status"></div>
+      <div id="appVersion" style="margin-top: 16px; text-align: center; font-size: 11px; color: #aaa;"></div>
     </div>
 
     <!-- 連続撮影モード -->
@@ -537,6 +538,13 @@
 
       // 縮小後の長辺の最大ピクセル数とJPEG画質（容量と画質のバランスで調整可）
       const MAX_EDGE = 2048;
+
+      // 更新が反映されているか確認するための番号（画面の一番下に表示）
+      const APP_VERSION = '2026.10.01-2';
+      document.getElementById('appVersion').innerText = 'ver ' + APP_VERSION;
+
+      // 向き補正の確認用：撮影直後に判定の数値を表示する（確認が済んだら false に戻す）
+      const SHOW_ROTATION_DEBUG = true;
       const JPEG_QUALITY = 0.85;
 
       // 1枚あたりの上限サイズ（コード.gs の MAX_FILE_BYTES と合わせる）
@@ -733,6 +741,12 @@
         ctx.drawImage(video, sx, sy, sw, sh, -dw / 2, -dh / 2, dw, dh);
         const data = canvas.toDataURL('image/jpeg', JPEG_QUALITY);
 
+        if (SHOW_ROTATION_DEBUG) {
+          const g = gravity ? 'x' + gravity.x.toFixed(1) + ' y' + gravity.y.toFixed(1) : 'なし';
+          showCameraMessage('映像' + vw + '×' + vh + ' / 画面' + window.innerWidth + '×' + window.innerHeight +
+            ' / 傾き ' + g + ' / 回転' + rotation + '° / 保存' + canvas.width + '×' + canvas.height, 6000);
+        }
+
         pushGalleryItem(data, 'image/jpeg', formatDate(new Date()));
         cameraShots.push(galleryList[galleryList.length - 1].id);
         renderCameraStrip();
@@ -849,12 +863,12 @@
         osc.stop(t + decay + 0.05);
       }
 
-      function showCameraMessage(text) {
+      function showCameraMessage(text, duration) {
         const msg = document.getElementById('cameraMessage');
         msg.innerText = text;
         msg.style.display = 'block';
         clearTimeout(msg._timer);
-        msg._timer = setTimeout(() => { msg.style.display = 'none'; }, 1500);
+        msg._timer = setTimeout(() => { msg.style.display = 'none'; }, duration || 1500);
       }
 
       function findGalleryItem(id) {
