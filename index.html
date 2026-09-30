@@ -540,7 +540,7 @@
       const MAX_EDGE = 2048;
 
       // 更新が反映されているか確認するための番号（画面の一番下に表示）
-      const APP_VERSION = '2026.10.01-2';
+      const APP_VERSION = '2026.10.01-3';
       document.getElementById('appVersion').innerText = 'ver ' + APP_VERSION;
 
       // 向き補正の確認用：撮影直後に判定の数値を表示する（確認が済んだら false に戻す）
@@ -779,15 +779,23 @@
         return x > 0 ? 90 : 270;
       }
 
+      function getScreenAngle() {
+        if (screen.orientation && typeof screen.orientation.angle === 'number') return screen.orientation.angle;
+        if (typeof window.orientation === 'number') return (window.orientation + 360) % 360;
+        return 0;
+      }
+
       /**
        * 切り出した映像を時計回りに何度回せば正しい向きになるか
-       * 画面が縦なのに映像が横長 = Android でカメラ部品の向き（スマホの右側が上）のまま届いている
+       * 映像の上端がスマホのどの辺にあたるかと、実際に上を向いている辺の差だけ回す。
+       * - 通常：映像の上端 = 画面の上端（アプリは縦固定なので、横に構えると映像が倒れる）
+       * - 画面が縦なのに映像が横長：カメラ部品の向き（スマホの右側が上）のまま届いている
        */
       function getCaptureRotation(vw, vh) {
-        const isAndroid = /Android/i.test(navigator.userAgent);
+        if (!/Android/i.test(navigator.userAgent)) return 0;
         const screenPortrait = window.innerHeight >= window.innerWidth;
-        if (!isAndroid || !screenPortrait || vw <= vh) return 0;
-        return (90 - getPhysicalUpAngle() + 360) % 360;
+        const frameTop = (screenPortrait && vw > vh) ? 90 : getScreenAngle();
+        return (frameTop - getPhysicalUpAngle() + 360) % 360;
       }
 
       // ==========================================
