@@ -40,6 +40,50 @@
         color: #666;
         line-height: 1.5;
       }
+      /* 保存先の選択 */
+      .form-group {
+        margin: 15px 0;
+      }
+      label.input-label {
+        display: block;
+        font-size: 14px;
+        font-weight: bold;
+        margin-bottom: 5px;
+        color: #3c4043;
+      }
+      .folder-row {
+        display: flex;
+        gap: 8px;
+      }
+      .folder-row select {
+        flex: 1;
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid #dadce0;
+        border-radius: 4px;
+        background: #fff;
+        color: #333;
+        font-size: 16px; /* 16px 未満だと iPhone でタップ時に画面が拡大される */
+      }
+      .folder-reload {
+        flex: none;
+        width: 44px;
+        border: 1px solid #dadce0;
+        border-radius: 4px;
+        background: #fff;
+        color: #1a73e8;
+        font-size: 20px;
+        cursor: pointer;
+      }
+      .folder-note {
+        font-size: 12px;
+        color: #666;
+        margin-top: 4px;
+      }
+      .folder-note.error {
+        color: #d93025;
+      }
+
       /* ファイル選択ボタンエリア */
       .file-btn-container {
         margin: 20px 0 10px 0;
@@ -453,6 +497,18 @@
       <p>撮影・選択した写真がギャラリーに入ります。（スマホ本体には保存されません）</p>
 
       <form id="uploadForm" onsubmit="return false;">
+        <!-- 保存先（親フォルダの中の子フォルダ。ドライブでフォルダを作ると自動で選択肢に出る） -->
+        <div class="form-group">
+          <label class="input-label" for="folderSelect">保存先</label>
+          <div class="folder-row">
+            <select id="folderSelect" onchange="onFolderChange()" disabled>
+              <option value="">読み込み中…</option>
+            </select>
+            <button type="button" id="folderReload" class="folder-reload" onclick="loadFolders()" aria-label="保存先の一覧を読み込み直す">↻</button>
+          </div>
+          <div id="folderNote" class="folder-note"></div>
+        </div>
+
         <!-- カメラ撮影とアルバム選択を分ける（multiple 付きだとカメラが出ない端末があるため） -->
         <div class="file-btn-container">
           <button type="button" class="custom-file-btn" onclick="openCamera()">📷 カメラで連続撮影</button>
@@ -540,7 +596,7 @@
       const MAX_EDGE = 2048;
 
       // 更新が反映されているか確認するための番号（画面の一番下に表示）
-      const APP_VERSION = '2026.10.01-4';
+      const APP_VERSION = '2026.10.02-1';
       document.getElementById('appVersion').innerText = 'ver ' + APP_VERSION;
 
       // 向き補正の確認用：撮影直後に判定の数値を表示する（確認が済んだら false に戻す）
@@ -549,6 +605,85 @@
 
       // 1枚あたりの上限サイズ（コード.gs の MAX_FILE_BYTES と合わせる）
       const MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+      // ==========================================
+      // 保存先（子フォルダ）の選択
+      // ==========================================
+      const FOLDER_STORAGE_KEY = 'eventPhoto.folderId'; // 前回選んだ保存先（この端末だけに記憶）
+      const NO_FOLDER_LABEL = '振り分けなし（親フォルダに保存）';
+
+      async function loadFolders() {
+        const select = document.getElementById('folderSelect');
+        const note = document.getElementById('folderNote');
+        select.disabled = true;
+        note.className = 'folder-note';
+        note.innerText = '保存先の一覧を読み込んでいます…';
+
+        let folders = [];
+        let failed = false;
+        try {
+          const res = await fetchFolderList();
+          if (!res || !res.success) throw new Error(res && res.message);
+          folders = res.folders || [];
+        } catch (e) {
+          console.warn('フォルダ一覧の読み込みエラー:', e);
+          failed = true;
+        }
+
+        const current = select.value; // 読み込み直したときは選択中のものを優先
+        const saved = current || readSavedFolder();
+        select.innerHTML = '';
+        select.appendChild(new Option(NO_FOLDER_LABEL, ''));
+        folders.forEach((f) => select.appendChild(new Option(f.name, f.id))); // 名前は文字として入れる
+
+        const found = folders.some((f) => f.id === saved);
+        select.value = found ? saved : '';
+        select.disabled = false;
+
+        if (failed) {
+          note.className = 'folder-note error';
+          note.innerText = '保存先の一覧を読み込めませんでした。↻ を押すと読み込み直します。このまま送ると親フォルダに保存されます。';
+        } else if (saved && !found) {
+          note.innerText = '前回の保存先が見つからないため、「振り分けなし」にしました。';
+        } else {
+          note.innerText = '';
+        }
+      }
+
+      function fetchFolderList() {
+        // Apps Script 上で表示している場合
+        if (window.google && google.script && google.script.run) {
+          return new Promise((resolve, reject) => {
+            google.script.run
+              .withSuccessHandler(resolve)
+              .withFailureHandler(reject)
+              .getFolderList();
+          });
+        }
+        return fetch(GAS_URL + '?action=folders', { cache: 'no-store' }).then((res) => {
+          if (!res.ok) throw new Error('通信エラー (' + res.status + ')');
+          return res.json();
+        });
+      }
+
+      function onFolderChange() {
+        document.getElementById('folderNote').innerText = '';
+        try {
+          localStorage.setItem(FOLDER_STORAGE_KEY, document.getElementById('folderSelect').value);
+        } catch (e) {
+          // 記憶できなくても選択はそのまま使える
+        }
+      }
+
+      function readSavedFolder() {
+        try {
+          return localStorage.getItem(FOLDER_STORAGE_KEY) || '';
+        } catch (e) {
+          return '';
+        }
+      }
+
+      loadFolders();
 
       let galleryList = [];
       let fileSeq = 0; // 削除しても減らさない連番（ファイル名の重複防止）
@@ -1444,64 +1579,70 @@
 
         if (uploadTargets.length === 0) return;
 
+        // 送信を始めた時点の保存先で最後まで送る（途中で変えられないようにする）
+        const folderSelect = document.getElementById('folderSelect');
+        const folderId = folderSelect.value;
+        const folderName = folderId ? folderSelect.options[folderSelect.selectedIndex].text : '親フォルダ';
+
         submitBtn.disabled = true;
+        folderSelect.disabled = true;
         statusDiv.style.color = '#333';
 
         let successCount = 0;
-        let failCount = 0;
 
-        // 1枚ずつ順番に送信するループ
-        for (let i = 0; i < uploadTargets.length; i++) {
-          const item = uploadTargets[i];
-          statusDiv.innerText = '送信中 (' + (i + 1) + ' / ' + uploadTargets.length + ' 枚目)...';
+        try {
+          // 1枚ずつ順番に送信するループ
+          for (let i = 0; i < uploadTargets.length; i++) {
+            const item = uploadTargets[i];
+            statusDiv.innerText = '「' + folderName + '」に送信中 (' + (i + 1) + ' / ' + uploadTargets.length + ' 枚目)...';
 
-          const fileData = {
-            data: item.data,
-            fileName: item.fileName,
-            mimeType: item.mimeType
-          };
+            const fileData = {
+              data: item.data,
+              fileName: item.fileName,
+              mimeType: item.mimeType
+            };
 
-          try {
-            const res = await sendSingleFilePromise(fileData);
-            if (res.success) {
-              successCount++;
-              // 送信できた画像だけギャラリーから除外
-              galleryList = galleryList.filter(g => g.id !== item.id);
-              renderGallery();
-            } else {
-              failCount++;
+            let res;
+            try {
+              res = await sendSingleFilePromise(fileData, folderId);
+            } catch (err) {
               statusDiv.style.color = 'red';
-              statusDiv.innerText = res.message;
-              submitBtn.disabled = false;
+              statusDiv.innerText = '送信失敗: ' + err.message;
               return;
             }
-          } catch (err) {
-            failCount++;
-            statusDiv.style.color = 'red';
-            statusDiv.innerText = '送信失敗: ' + err.message;
-            submitBtn.disabled = false;
-            return;
-          }
-        }
+            if (!res.success) {
+              statusDiv.style.color = 'red';
+              statusDiv.innerText = res.message;
+              // 保存先が消された・名前が変わった場合に備えて一覧を読み込み直す
+              if (/保存先のフォルダが見つかりません/.test(res.message)) loadFolders();
+              return;
+            }
 
-        if (failCount === 0) {
+            successCount++;
+            // 送信できた画像だけギャラリーから除外
+            galleryList = galleryList.filter(g => g.id !== item.id);
+            renderGallery();
+          }
+
           statusDiv.style.color = 'green';
-          statusDiv.innerText = successCount + '件の写真を正常に保存しました！';
+          statusDiv.innerText = successCount + '件の写真を「' + folderName + '」に保存しました！';
+        } finally {
+          submitBtn.disabled = galleryList.filter(g => g.selected).length === 0;
+          folderSelect.disabled = false;
         }
-        submitBtn.disabled = false;
       }
 
       /**
        * 非同期処理用プロミス関数
        */
-      function sendSingleFilePromise(fileData) {
+      function sendSingleFilePromise(fileData, folderId) {
         // Apps Script 上で表示している場合
         if (window.google && google.script && google.script.run) {
           return new Promise((resolve, reject) => {
             google.script.run
               .withSuccessHandler((res) => resolve(res))
               .withFailureHandler((err) => reject(err))
-              .uploadSingleFile(fileData);
+              .uploadSingleFile(fileData, folderId);
           });
         }
 
@@ -1513,7 +1654,7 @@
         return fetch(GAS_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({ file: fileData })
+          body: JSON.stringify({ file: fileData, folderId: folderId })
         }).then((res) => {
           if (!res.ok) throw new Error('通信エラー (' + res.status + ')');
           return res.json();
