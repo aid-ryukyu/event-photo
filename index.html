@@ -596,7 +596,7 @@
       const MAX_EDGE = 2048;
 
       // 更新が反映されているか確認するための番号（画面の一番下に表示）
-      const APP_VERSION = '2026.10.02-1';
+      const APP_VERSION = '2026.10.02-2';
       document.getElementById('appVersion').innerText = 'ver ' + APP_VERSION;
 
       // 向き補正の確認用：撮影直後に判定の数値を表示する（確認が済んだら false に戻す）
@@ -1568,8 +1568,13 @@
         else if (e.key === 'Escape') closeViewer();
       });
 
+      // 同時に送る最大枚数。全部いっぺんに送ると古い端末で画面が固まるため上限を設ける
+      // （重い端末があれば 2 に下げる）
+      const UPLOAD_CONCURRENCY = 3;
+
       /**
-       * 1枚ずつ安全に順次送信（画面フリーズ・白画面防止処理）
+       * 最大 UPLOAD_CONCURRENCY 枚ずつ同時に送信する（1枚終わるごとに次の1枚を送り始める）
+       * 失敗したら新しい送信は始めず、送信中の分が終わるのを待ってから止める
        */
       async function processUpload() {
         const statusDiv = document.getElementById('status');
@@ -1588,14 +1593,19 @@
         folderSelect.disabled = true;
         statusDiv.style.color = '#333';
 
+        const total = uploadTargets.length;
+        let nextIndex = 0;
         let successCount = 0;
+        let errorMessage = null;
 
-        try {
-          // 1枚ずつ順番に送信するループ
-          for (let i = 0; i < uploadTargets.length; i++) {
-            const item = uploadTargets[i];
-            statusDiv.innerText = '「' + folderName + '」に送信中 (' + (i + 1) + ' / ' + uploadTargets.length + ' 枚目)...';
+        const showProgress = () => {
+          statusDiv.innerText = '「' + folderName + '」に送信中 (' + successCount + ' / ' + total + ' 枚完了)...';
+        };
 
+        // 送信係を最大 UPLOAD_CONCURRENCY 人用意し、それぞれが残りの写真を1枚ずつ取って送る
+        const worker = async () => {
+          while (errorMessage === null && nextIndex < total) {
+            const item = uploadTargets[nextIndex++];
             const fileData = {
               data: item.data,
               fileName: item.fileName,
@@ -1606,15 +1616,11 @@
             try {
               res = await sendSingleFilePromise(fileData, folderId);
             } catch (err) {
-              statusDiv.style.color = 'red';
-              statusDiv.innerText = '送信失敗: ' + err.message;
+              if (errorMessage === null) errorMessage = '送信失敗: ' + err.message;
               return;
             }
             if (!res.success) {
-              statusDiv.style.color = 'red';
-              statusDiv.innerText = res.message;
-              // 保存先が消された・名前が変わった場合に備えて一覧を読み込み直す
-              if (/保存先のフォルダが見つかりません/.test(res.message)) loadFolders();
+              if (errorMessage === null) errorMessage = res.message;
               return;
             }
 
@@ -1622,6 +1628,23 @@
             // 送信できた画像だけギャラリーから除外
             galleryList = galleryList.filter(g => g.id !== item.id);
             renderGallery();
+            showProgress();
+          }
+        };
+
+        try {
+          showProgress();
+          const workers = [];
+          for (let i = 0; i < Math.min(UPLOAD_CONCURRENCY, total); i++) workers.push(worker());
+          await Promise.all(workers);
+
+          if (errorMessage !== null) {
+            statusDiv.style.color = 'red';
+            statusDiv.innerText = errorMessage +
+              (successCount > 0 ? '\n（' + successCount + '件は保存できました。残りの写真はギャラリーに残っています）' : '');
+            // 保存先が消された・名前が変わった場合に備えて一覧を読み込み直す
+            if (/保存先のフォルダが見つかりません/.test(errorMessage)) loadFolders();
+            return;
           }
 
           statusDiv.style.color = 'green';
